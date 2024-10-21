@@ -121,7 +121,6 @@ client_handle_set_configuration(struct lldpd *cfg, enum hmsg_type *type, void *i
 		levent_send_now(cfg);
 	}
 
-#ifdef ENABLE_LLDPMED
 	if (CHANGED(c_enable_fast_start)) {
 		cfg->g_config.c_enable_fast_start = config->c_enable_fast_start;
 		log_debug("rpc", "client asked to %s fast start",
@@ -132,7 +131,6 @@ client_handle_set_configuration(struct lldpd *cfg, enum hmsg_type *type, void *i
 		    config->c_tx_fast_interval);
 		cfg->g_config.c_tx_fast_interval = config->c_tx_fast_interval;
 	}
-#endif
 	if (CHANGED_STR(c_iface_pattern)) {
 		log_debug("rpc", "change interface pattern to %s",
 		    config->c_iface_pattern ? config->c_iface_pattern : "(NULL)");
