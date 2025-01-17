@@ -28,6 +28,7 @@
 #include <time.h>
 #include <libgen.h>
 #include <assert.h>
+#include <sys/param.h>
 #include <sys/utsname.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -109,7 +110,7 @@ usage(void)
 	    "-O file  Override default configuration locations processed by lldpcli(8) at start.\n");
 #ifdef ENABLE_LLDPMED
 	fprintf(stderr,
-	    "-M class Enable emission of LLDP-MED frame. 'class' should be one of:\n");
+	    "-M class Enable emission of LLDP-MED frames. 'class' should be one of:\n");
 	fprintf(stderr, "             1 Generic Endpoint (Class I)\n");
 	fprintf(stderr, "             2 Media Endpoint (Class II)\n");
 	fprintf(stderr, "             3 Communication Device Endpoints (Class III)\n");
@@ -857,6 +858,8 @@ lldpd_get_os_release()
 
 	while ((fgets(line, sizeof(line), fp) != NULL)) {
 		key = strtok(line, "=");
+		if (key == NULL) continue;
+
 		val = strtok(NULL, "=");
 
 		if (strncmp(key, "PRETTY_NAME", sizeof(line)) == 0) {
@@ -1062,7 +1065,7 @@ lldpd_recv(struct lldpd *cfg, struct lldpd_hardware *hardware, int fd)
 	log_debug("receive", "decode received frame on %s", hardware->h_ifname);
 	TRACE(LLDPD_FRAME_RECEIVED(hardware->h_ifname, buffer, (size_t)n));
 	lldpd_decode(cfg, buffer, n, hardware);
-	lldpd_hide_all(cfg); /* Immediatly hide */
+	lldpd_hide_all(cfg); /* Immediately hide */
 	lldpd_dot3_power_pd_pse(hardware);
 	lldpd_count_neighbors(cfg);
 	free(buffer);
@@ -1457,36 +1460,50 @@ lldpd_started_by_systemd()
 {
 #  ifdef HOST_OS_LINUX
 	int fd = -1;
-	const char *notifysocket = getenv("NOTIFY_SOCKET");
-	if (!notifysocket || !strchr("@/", notifysocket[0]) || strlen(notifysocket) < 2)
-		return 0;
+	int ret = 0;
+	size_t path_length;
+	union sockaddr_union {
+		struct sockaddr sa;
+		struct sockaddr_un sun;
+	} socket_addr = {
+		.sun.sun_family = AF_UNIX,
+	};
+	const char *socket_path = getenv("NOTIFY_SOCKET");
+	if (!socket_path || (socket_path[0] != '/' && socket_path[0] != '@') ||
+	    (path_length = strlen(socket_path)) < 2)
+		goto done;
+
+	if (path_length >= sizeof(socket_addr.sun.sun_path)) {
+		log_warnx("main", "systemd notification socket is too long");
+		goto done;
+	}
+	memcpy(socket_addr.sun.sun_path, socket_path, path_length);
+
+	/* Support for abstract socket */
+	if (socket_addr.sun.sun_path[0] == '@') socket_addr.sun.sun_path[0] = 0;
 
 	log_debug("main", "running with systemd, don't fork but signal ready");
-	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
+	if ((fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) {
 		log_warn("main", "unable to open systemd notification socket %s",
-		    notifysocket);
-		return 0;
+		    socket_path);
+		goto done;
 	}
-
-	struct sockaddr_un su = { .sun_family = AF_UNIX };
-	strlcpy(su.sun_path, notifysocket, sizeof(su.sun_path));
-	if (notifysocket[0] == '@') su.sun_path[0] = 0;
-
+	if (connect(fd, &socket_addr.sa,
+		offsetof(struct sockaddr_un, sun_path) + path_length) != 0) {
+		log_warn("main", "unable to connect to systemd notification socket");
+		goto done;
+	}
 	char ready[] = "READY=1";
-	struct iovec iov = { .iov_base = ready, .iov_len = sizeof ready - 1 };
-	struct msghdr hdr = { .msg_name = &su,
-		.msg_namelen =
-		    offsetof(struct sockaddr_un, sun_path) + strlen(notifysocket),
-		.msg_iov = &iov,
-		.msg_iovlen = 1 };
-	unsetenv("NOTIFY_SOCKET");
-	if (sendmsg(fd, &hdr, MSG_NOSIGNAL) < 0) {
+	ssize_t written = write(fd, ready, sizeof ready - 1);
+	if (written != (ssize_t)sizeof ready - 1) {
 		log_warn("main", "unable to send notification to systemd");
-		close(fd);
-		return 0;
+		goto done;
 	}
-	close(fd);
-	return 1;
+	unsetenv("NOTIFY_SOCKET");
+	ret = 1;
+done:
+	if (fd >= 0) close(fd);
+	return ret;
 #  else
 	return 0;
 #  endif
@@ -1564,7 +1581,9 @@ lldpd_main(int argc, char *argv[], char *envp[])
 	char *platform_override = NULL;
 	char *lsb_release = NULL;
 	const char *lldpcli = LLDPCLI_PATH;
+#ifndef HOST_OS_OSX
 	const char *pidfile = LLDPD_PID_FILE;
+#endif
 	int smart = 15;
 	int receiveonly = 0, version = 0;
 	int ctl;
@@ -1611,9 +1630,11 @@ lldpd_main(int argc, char *argv[], char *envp[])
 		case 'D':
 			log_accept(optarg);
 			break;
+#ifndef HOST_OS_OSX
 		case 'p':
 			pidfile = optarg;
 			break;
+#endif
 		case 'r':
 			receiveonly = 1;
 			break;
@@ -1916,7 +1937,7 @@ lldpd_main(int argc, char *argv[], char *envp[])
 	cfg->g_config.c_tx_interval = LLDPD_TX_INTERVAL * 1000;
 	cfg->g_config.c_tx_hold = LLDPD_TX_HOLD;
 	cfg->g_config.c_ttl = cfg->g_config.c_tx_interval * cfg->g_config.c_tx_hold;
-	cfg->g_config.c_ttl = (cfg->g_config.c_ttl + 999) / 1000;
+	cfg->g_config.c_ttl = MIN((cfg->g_config.c_ttl + 999) / 1000, 65535);
 	cfg->g_config.c_max_neighbors = LLDPD_MAX_NEIGHBORS;
 	cfg->g_config.c_enable_fast_start = enable_fast_start;
 	cfg->g_config.c_tx_fast_init = LLDPD_FAST_INIT;

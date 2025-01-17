@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -31,7 +32,8 @@
 #include "client.h"
 
 static void
-display_cap(struct writer *w, lldpctl_atom_t *chassis, u_int8_t bit, const char *symbol)
+display_cap(struct writer *w, lldpctl_atom_t *chassis, u_int16_t bit,
+    const char *symbol)
 {
 	if (lldpctl_atom_get_int(chassis, lldpctl_k_chassis_cap_available) & bit) {
 		tag_start(w, "capability", "Capability");
@@ -276,6 +278,9 @@ display_chassis(struct writer *w, lldpctl_atom_t *chassis, int details)
 	display_cap(w, chassis, LLDP_CAP_TELEPHONE, "Tel");
 	display_cap(w, chassis, LLDP_CAP_DOCSIS, "Docsis");
 	display_cap(w, chassis, LLDP_CAP_STATION, "Station");
+	display_cap(w, chassis, LLDP_CAP_CVLAN, "CVLAN");
+	display_cap(w, chassis, LLDP_CAP_SVLAN, "SVLAN");
+	display_cap(w, chassis, LLDP_CAP_TPMRCOMP, "TPMR");
 
 	tag_end(w);
 }
@@ -595,7 +600,7 @@ display_local_ttl(struct writer *w, lldpctl_conn_t *conn, int details)
 	tx_interval =
 	    lldpctl_atom_get_int(configuration, lldpctl_k_config_tx_interval_ms);
 
-	tx_interval = (tx_interval * tx_hold + 999) / 1000;
+	tx_interval = MIN((tx_interval * tx_hold + 999) / 1000, 65535);
 
 	if (asprintf(&ttl, "%lu", tx_interval) == -1) {
 		log_warnx("lldpctl", "not enough memory to build TTL.");

@@ -244,6 +244,10 @@ netlink_parse_linkinfo(struct interfaces_device *iff, struct rtattr *rta, int le
 				log_debug("netlink", "interface %s is a team",
 				    iff->name);
 				iff->type |= IFACE_BOND_T;
+			} else if (!strcmp(kind, "wlan")) {
+				log_debug("netlink", "interface %s is wireless",
+				    iff->name);
+				iff->type |= IFACE_WIRELESS_T | IFACE_PHYSICAL_T;
 			}
 		}
 	}
@@ -886,7 +890,7 @@ netlink_initialize(struct lldpd *cfg)
 	if (cfg->g_netlink) return 0;
 
 	log_debug("netlink", "initialize netlink subsystem");
-	if ((cfg->g_netlink = calloc(sizeof(struct lldpd_netlink), 1)) == NULL) {
+	if ((cfg->g_netlink = calloc(1, sizeof(struct lldpd_netlink))) == NULL) {
 		log_warn("netlink", "unable to allocate memory for netlink subsystem");
 		goto end;
 	}

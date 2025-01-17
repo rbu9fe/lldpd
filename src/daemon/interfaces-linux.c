@@ -256,7 +256,7 @@ iflinux_get_permanent_mac_ethtool(struct lldpd *cfg,
 	int ret = -1;
 	struct ifreq ifr = {};
 	struct ethtool_perm_addr *epaddr =
-	    calloc(sizeof(struct ethtool_perm_addr) + ETHER_ADDR_LEN, 1);
+	    calloc(1, sizeof(struct ethtool_perm_addr) + ETHER_ADDR_LEN);
 	if (epaddr == NULL) goto end;
 
 	strlcpy(ifr.ifr_name, iface->name, sizeof(ifr.ifr_name));
@@ -877,8 +877,12 @@ iflinux_add_driver(struct lldpd *cfg, struct interfaces_device_list *interfaces)
 static void
 iflinux_add_wireless(struct lldpd *cfg, struct interfaces_device_list *interfaces)
 {
+#ifdef ENABLE_OLDIES
 	struct interfaces_device *iface;
 	TAILQ_FOREACH (iface, interfaces, next) {
+		if (iface->type &
+		    (IFACE_VLAN_T | IFACE_BOND_T | IFACE_BRIDGE_T | IFACE_WIRELESS_T))
+			continue;
 		struct iwreq iwr = {};
 		strlcpy(iwr.ifr_name, iface->name, IFNAMSIZ);
 		if (ioctl(cfg->g_sock, SIOCGIWNAME, &iwr) >= 0) {
@@ -886,6 +890,7 @@ iflinux_add_wireless(struct lldpd *cfg, struct interfaces_device_list *interface
 			iface->type |= IFACE_WIRELESS_T | IFACE_PHYSICAL_T;
 		}
 	}
+#endif
 }
 
 /* Query each interface to see if it is a bridge */
@@ -1033,7 +1038,7 @@ interfaces_update(struct lldpd *cfg)
 
 	/* Mac/PHY */
 	TAILQ_FOREACH (hardware, &cfg->g_hardware, h_entries) {
-		if (!hardware->h_flags) continue;
+		if (!(hardware->h_flags & IFF_RUNNING)) continue;
 		iflinux_macphy(cfg, hardware);
 		interfaces_helper_promisc(cfg, hardware);
 	}

@@ -40,24 +40,28 @@
 #ifdef HAVE_LIBREADLINE
 #  if defined(HAVE_READLINE_READLINE_H)
 #    include <readline/readline.h>
+#  elif defined(HAVE_EDITLINE_READLINE_H)
+#    include <editline/readline.h>
 #  elif defined(HAVE_READLINE_H)
 #    include <readline.h>
 #  else
-extern char *readline();
+extern char *readline(const char *);
 extern char *rl_line_buffer;
 extern int rl_point;
 extern int rl_insert_text(const char *);
-extern void rl_forced_update_display(void);
 extern int rl_bind_key(int, int (*f)(int, int));
+extern void rl_forced_update_display(void);
 #  endif
 #endif
 #ifdef HAVE_READLINE_HISTORY
 #  if defined(HAVE_READLINE_HISTORY_H)
 #    include <readline/history.h>
+#  elif defined(HAVE_EDITLINE_HISTORY_H)
+#    include <editline/history.h>
 #  elif defined(HAVE_HISTORY_H)
 #    include <history.h>
 #  else
-extern void add_history();
+extern void add_history(const char *);
 #  endif
 #endif
 #undef NEWLINE

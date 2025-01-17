@@ -8,7 +8,6 @@ case "$(uname -s)" in
         LLDPD_CONFIG_ARGS="$LLDPD_CONFIG_ARGS --localstatedir=/var --sysconfdir=/etc --prefix=/usr"
         [ $(uname -m) != x86_64 ] || \
             LLDPD_CONFIG_ARGS="$LLDPD_CONFIG_ARGS --enable-sanitizers"
-        LLDPD_CONFIG_ARGS="$LLDPD_CONFIG_ARGS LDFLAGS=-fuse-ld=gold"
         ;;
     Darwin)
         LLDPD_CONFIG_ARGS="$LLDPD_CONFIG_ARGS CFLAGS=-mmacosx-version-min=11.1"
@@ -40,13 +39,13 @@ fi
 case "$(uname -s)" in
     Darwin)
         # Create a package
-        make -C osx pkg # ARCHS="x86_64 arm64"
+        make -C osx pkg ARCHS="x86_64 arm64"
         otool -l osx/lldpd*/usr/local/sbin/lldpd
         ;;
     Linux)
         # Integration tests
         cd ../tests/integration
-        sudo $(which python3) -m pytest -n 5 -vv --boxed || \
+        sudo $(which python3) -m pytest -n5 -vv --forked || \
             sudo $(which python3) -m pytest -vvv --last-failed --maxfail=5
         ;;
 esac

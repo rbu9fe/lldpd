@@ -11,7 +11,7 @@ on:
     - cron: 0 7 1 * *
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         config-args:
@@ -107,28 +107,21 @@ jobs:
       matrix:
         os:
           - name: freebsd
-            version: '13.2'
-            runner: macos-latest
-            hypervisor: qemu
+            version: '13.3'
           - name: netbsd
             version: '9.3'
-            runner: macos-latest
-            hypervisor: qemu
           - name: openbsd
             version: '7.4'
-            runner: macos-latest
-            hypervisor: xhyve
-    runs-on: ${{ matrix.os.runner }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Test on ${{ matrix.os.name }}
-        uses: cross-platform-actions/action@v0.22.0
+        uses: cross-platform-actions/action@v0.25.0
         with:
           operating_system: ${{ matrix.os.name }}
           version: ${{ matrix.os.version }}
-          hypervisor: ${{ matrix.os.hypervisor }}
           environment_variables: LLDPD_CONFIG_ARGS
           shell: bash
           run: |
@@ -164,7 +157,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
@@ -193,7 +186,7 @@ jobs:
         with:
           name: release
       - name: Publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body_path: release.md
           draft: true

@@ -401,6 +401,22 @@ lldpctl_watch(lldpctl_conn_t *conn)
 	return 0;
 }
 
+void
+lldpctl_watch_sync_unblock(lldpctl_conn_t *conn)
+{
+	if (conn->state != CONN_STATE_WATCHING) return;
+
+	if (!conn->sync_clb) return;
+
+	struct lldpctl_conn_sync_t *data = conn->user_data;
+
+	if (data->pipe_fd[1] != -1) {
+		/* Write to the pipe to unblock the read */
+		ssize_t rc = write(data->pipe_fd[1], "x", 1);
+		(void)rc;
+	}
+}
+
 lldpctl_atom_t *
 lldpctl_get_configuration(lldpctl_conn_t *conn)
 {
@@ -649,7 +665,7 @@ _lldpctl_dump_in_atom(lldpctl_atom_t *atom, const uint8_t *input, size_t size, c
 		snprintf(buffer + i * 3, 4, "%02x%c", *(u_int8_t *)(input + i), sep);
 	if (max > 0 && size > max)
 		snprintf(buffer + i * 3, sizeof(truncation) + 1, "%s", truncation);
-	else
+	else if (i > 0)
 		*(buffer + i * 3 - 1) = 0;
 	return buffer;
 }
