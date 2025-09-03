@@ -16,6 +16,7 @@
 #include <functional>
 #include <thread>
 #include <mutex>
+#include <system_error>
 
 #include <lldpctl.h>
 
@@ -41,7 +42,7 @@
   CHECK_LLDP_GENERIC(                                                    \
       FAILED_NULL, __call, const auto _rc_ { lldpctl_last_error(conn) }; \
       if (LLDPCTL_NO_ERROR != _rc_) {                                    \
-  throw std::system_error(std::error_code(_rc_, LldpErrCategory()),      \
+  throw std::system_error(_rc_,      									 \
       "'" __stringify(__call) "' failed");                               \
       })
 
@@ -49,14 +50,14 @@
 #define CHECK_LLDP_N(__call, conn)                                                     \
   CHECK_LLDP_GENERIC(FAILED_NEGATIVE, __call,                                          \
 		     const auto _rc_ { lldpctl_last_error(conn) };                     \
-		     throw std::system_error(std::error_code(_rc_, LldpErrCategory()), \
+		     throw std::system_error(_rc_,									   \
 			 "'" __stringify(__call) "' failed");)
 
 #define CHECK_LLDP_N2(pre, __call, conn)                            \
   CHECK_LLDP_GENERIC(                                               \
       FAILED_NEGATIVE, __call, if (pre) {                           \
   const auto _rc_ { lldpctl_last_error(conn) };                     \
-  throw std::system_error(std::error_code(_rc_, LldpErrCategory()), \
+  throw std::system_error(_rc_, 								    \
       "'" __stringify(__call) "' failed");                          \
       })
 
@@ -64,7 +65,47 @@
 
 /* *** exported interfaces ****************************************************/
 
+namespace
+{
+/**
+ * @brief LLDP error category. Don't use this class directly, instead, use @ref lldpcli::make_error_code.
+ */
+class LldpErrCategory : public std::error_category {
+public:
+	const char *name() const noexcept override { return "lldpctl"; }
+
+	std::string message(int ev) const override
+    {
+		return ::lldpctl_strerror(static_cast<lldpctl_error_t>(ev));
+    }
+};
+
+const LldpErrCategory lldp_err_category{};
+
+} // namespace
+
+namespace std
+{
+/**
+ * @brief Template specialization to allow using @p lldpctl_error_t as a @p std::error_code.
+ *
+ * @p note Requires the @p make_error_code function implementation below.
+ */
+template<>
+struct is_error_code_enum<lldpctl_error_t> : true_type {
+};
+} // namespace std
+
+/**
+ * Convenience function to wrap an LLDP error code in a @p std::error_code.
+ */
+inline std::error_code make_error_code( lldpctl_error_t e )
+{
+    return { static_cast<int>( e ), lldp_err_category };
+}
+
 namespace lldpcli {
+
 namespace literals {
 /**
  * @brief Operator to define std::byte literals.
@@ -78,17 +119,22 @@ consteval std::byte operator"" _b(unsigned long long int value)
 } // namespace literals
 
 /**
- * @brief LLDP error category.
+ * @brief Fallback type trait for checking against a const char array.
  */
-class LldpErrCategory : public std::error_category {
-    public:
-	const char *name() const noexcept override { return "lldpctl"; }
+template <typename T>
+struct is_const_char_array : std::false_type {};
 
-	std::string message(int ev) const override
-	{
-		return ::lldpctl_strerror(static_cast<lldpctl_error_t>(ev));
-	}
-};
+/**
+ * @brief Specialization of @p is_const_char_array for an actual array.
+ */
+template <std::size_t N>
+struct is_const_char_array<const char[N]> : std::true_type {};
+
+/**
+ * @brief Convenience constexpr for @p is_const_char_array value.
+ */
+template <typename T>
+inline constexpr bool is_const_char_array_v = is_const_char_array<T>::value;
 
 /**
  * @brief Wrapper class for @p lldpctl_atom_t with automatic lifetime management.
@@ -215,8 +261,10 @@ class LldpAtom {
 		lldpctl_atom_t *atom;
 		lldpctl_atom_foreach(it, atom)
 		{
-			list.emplace_back(atom, true, conn_);
+			list.emplace_back(atom, true, conn_,
+				std::make_unique<LldpAtom>(*this));
 		}
+		::lldpctl_atom_dec_ref(it);
 
 		return list;
 	}
@@ -252,7 +300,18 @@ class LldpAtom {
 
 	template <typename T> void SetValue(lldpctl_key_t key, const T &data)
 	{
-		if constexpr (std::is_same_v<T, std::optional<std::string>> ||
+		if constexpr (std::is_same_v<T, const char*> ||
+		    is_const_char_array<std::add_const_t<T>>::value ||
+			std::is_same_v<T, std::nullptr_t>) {
+			CHECK_LLDP_P(::lldpctl_atom_set_str(atom_, key,
+					 data),
+			    conn_.get());
+		} else if constexpr (std::is_same_v<T, std::string> ||
+		    std::is_same_v<T, std::string_view>) {
+			CHECK_LLDP_P(::lldpctl_atom_set_str(atom_, key,
+					 data.data()),
+			    conn_.get());
+		} else if constexpr (std::is_same_v<T, std::optional<std::string>> ||
 		    std::is_same_v<T, std::optional<std::string_view>>) {
 			CHECK_LLDP_P(::lldpctl_atom_set_str(atom_, key,
 					 data.has_value() ? data->data() : nullptr),
@@ -285,11 +344,12 @@ class LldpAtom {
  */
 class LldpCtl {
     public:
-	explicit LldpCtl()
+	explicit LldpCtl(std::string_view ctlname = ::lldpctl_get_default_transport())
+		: conn_ { ::lldpctl_new_name(ctlname.data(), nullptr, nullptr, this),
+			&::lldpctl_release }
 	{
 		if (!conn_) {
-			throw std::system_error(std::error_code(LLDPCTL_ERR_NOMEM,
-						    LldpErrCategory()),
+			throw std::system_error(LLDPCTL_ERR_NOMEM,
 			    "Could not create lldpctl connection.");
 		}
 	}
@@ -333,7 +393,7 @@ class LldpCtl {
 
 	std::list<LldpAtom> GetInterfaces() const
 	{
-		const auto &it { ::lldpctl_get_interfaces(conn_.get()) };
+		auto *it { ::lldpctl_get_interfaces(conn_.get()) };
 
 		std::list<LldpAtom> list;
 		lldpctl_atom_t *atom;
@@ -341,6 +401,7 @@ class LldpCtl {
 		{
 			list.emplace_back(atom, true, conn_);
 		}
+		::lldpctl_atom_dec_ref(it);
 
 		return list;
 	}
@@ -393,8 +454,7 @@ class LldpCtl {
 	}
 
     private:
-	std::shared_ptr<lldpctl_conn_t> conn_ { ::lldpctl_new(nullptr, nullptr, this),
-		&::lldpctl_release };
+	std::shared_ptr<lldpctl_conn_t> conn_;
 };
 
 /**
@@ -429,8 +489,7 @@ template <typename X = void, typename Y = void> class LldpWatch {
 		      std::nullopt)
 	{
 		if (!conn_) {
-			throw std::system_error(std::error_code(LLDPCTL_ERR_NOMEM,
-						    LldpErrCategory()),
+			throw std::system_error(LLDPCTL_ERR_NOMEM,
 			    "Could not create lldpctl connection.");
 		}
 
@@ -465,6 +524,8 @@ template <typename X = void, typename Y = void> class LldpWatch {
 	/**
 	 * @brief Register an interface specific callback on remote changes.
 	 *
+	 * @note Only up to one callback can be registered per interface.
+	 *
 	 * @param if_name       The local interface to monitor.
 	 * @param callback      Callback to trigger on remote changes.
 	 * @param ctx           Optional context passed to @p callback.
@@ -478,12 +539,16 @@ template <typename X = void, typename Y = void> class LldpWatch {
 			LldpCtl().GetInterface(if_name)
 		};
 		if (!interface.has_value()) {
-			throw std::system_error(std::error_code(LLDPCTL_ERR_NOT_EXIST,
-						    LldpErrCategory()),
+			throw std::system_error(LLDPCTL_ERR_NOT_EXIST,
 			    "Couldn't find interface '" + if_name + "'");
 		}
 
 		std::scoped_lock lock { mutex_ };
+
+		if (interface_callbacks_.contains(if_name) ) {
+			throw std::system_error(LLDPCTL_ERR_CANNOT_CREATE,
+			    "Callback already registered for interface '" + if_name + "'");
+		}
 
 		/**
 		 * Note:
@@ -501,6 +566,30 @@ template <typename X = void, typename Y = void> class LldpWatch {
 
 		interface_callbacks_.try_emplace(if_name,
 		    std::make_pair(callback, const_cast<Y *>(ctx)));
+	}
+
+	/**
+	 * @brief Unregister a previously registered interface specific callback
+	 * on remote changes.
+	 *
+	 * @param if_name       The local interface not to monitor anymore.
+	 */
+	void UnregisterInterfaceCallback(const std::string &if_name)
+	{
+		const auto interface {
+			LldpCtl().GetInterface(if_name)
+		};
+		if (!interface.has_value()) {
+			throw std::system_error(LLDPCTL_ERR_NOT_EXIST,
+			    "Couldn't find interface '" + if_name + "'");
+		}
+
+		std::scoped_lock lock { mutex_ };
+
+		if (0 == interface_callbacks_.erase(if_name) ) {
+			throw std::system_error(LLDPCTL_ERR_NOT_EXIST,
+			    "No callback registered for interface '" + if_name + "'");
+		}
 	}
 
     private:
