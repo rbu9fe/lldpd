@@ -6,12 +6,13 @@ class Lldpd < Formula
   license "ISC"
 
   livecheck do
-    url "https://github.com/lldpd/lldpd.git"
+    url :homepage
+    regex(/href=.*?lldpd[._-]v?(\d+(?:\.\d+)+)\.t/i)
   end
 
   option "with-snmp", "Build SNMP subagent support"
 
-  depends_on "pkg-config" => :build
+  depends_on "pkgconf" => :build
   depends_on "libevent"
   depends_on "net-snmp" if build.with? "snmp"
   depends_on "readline"
@@ -24,21 +25,19 @@ class Lldpd < Formula
       --prefix=#{prefix}
       --sysconfdir=#{etc}
       --localstatedir=#{var}
-      --with-launchddaemonsdir=no
       --with-privsep-chroot=/var/empty
       --with-readline
       --with-xml
+      --without-launchddaemonsdir
       CPPFLAGS=-I#{readline.include}\ -DRONLY=1
       LDFLAGS=-L#{readline.lib}
     ]
     args << (build.with?("snmp") ? "--with-snmp" : "--without-snmp")
 
-    system "./configure", *args
+    system "./configure", *args, *std_configure_args
     system "make"
     system "make", "install"
-  end
 
-  def post_install
     (var/"run").mkpath
   end
 
