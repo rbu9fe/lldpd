@@ -460,34 +460,23 @@ class LldpCtl {
 
 /**
  * @brief Wrapper for change callback registration.
- *
- * @tparam X Context pointer type for the general optional callback passed to the
- * constructor.
- * @tparam Y Context pointer type for the interface specific callbacks passed to @ref
- * RegisterInterfaceCallback.
  */
-template <typename X = void, typename Y = void> class LldpWatch {
+class LldpWatch {
     public:
-	template <typename C>
 	using ChangeCallback =
 	    const std::function<void(std::string_view if_name, lldpctl_change_t change,
-		const LldpAtom interface, const LldpAtom neighbor, C *ctx)>;
+		const LldpAtom &interface, const LldpAtom &neighbor)>;
 
 	/**
 	 * @brief Construct a new Lldp Watch object.
 	 *
 	 * @param callback  Optional callback to trigger on remote changes.
 	 *                  Additionally, interface specific callbacks can be registered
-	 * using @ref RegisterInterfaceCallback.
-	 * @param ctx       Optional context passed to @p callback.
+	 * 					using @ref RegisterInterfaceCallback.
 	 */
 	explicit LldpWatch(
-	    const std::optional<ChangeCallback<X>> &callback = std::nullopt,
-	    const X *ctx = nullptr)
-	    : general_callback_(callback.has_value() ?
-		      std::make_optional(
-			  std::make_pair(*callback, const_cast<X *>(ctx))) :
-		      std::nullopt)
+	    const std::optional<ChangeCallback> &callback = std::nullopt)
+	    : general_callback_(callback)
 	{
 		if (!conn_) {
 			throw std::system_error(LLDPCTL_ERR_NOMEM,
@@ -495,7 +484,7 @@ template <typename X = void, typename Y = void> class LldpWatch {
 		}
 
 		CHECK_LLDP_N(::lldpctl_watch_callback2(conn_,
-				 &LldpWatch<X, Y>::WatchCallback,
+				 &LldpWatch::WatchCallback,
 				 static_cast<void *>(this)),
 		    conn_);
 
@@ -529,12 +518,11 @@ template <typename X = void, typename Y = void> class LldpWatch {
 	 *
 	 * @param if_name       The local interface to monitor.
 	 * @param callback      Callback to trigger on remote changes.
-	 * @param ctx           Optional context passed to @p callback.
 	 * @param trigger_init  It @p true then @p callback is invoked during
 	 * registration for all existing neighbors.
 	 */
 	void RegisterInterfaceCallback(const std::string &if_name,
-	    ChangeCallback<Y> callback, const Y *ctx, bool trigger_init = false)
+	    const ChangeCallback &callback, bool trigger_init = false)
 	{
 		const auto interface {
 			LldpCtl().GetInterface(if_name)
@@ -561,12 +549,11 @@ template <typename X = void, typename Y = void> class LldpWatch {
 			for (const auto &neighbor : interface->GetPort().GetAtomList(
 				 lldpctl_k_port_neighbors)) {
 				callback(if_name, lldpctl_change_t::lldpctl_c_added,
-				    *interface, neighbor, const_cast<Y *>(ctx));
+				    *interface, neighbor);
 			}
 		}
 
-		interface_callbacks_.try_emplace(if_name,
-		    std::make_pair(callback, const_cast<Y *>(ctx)));
+		interface_callbacks_.try_emplace(if_name, callback);
 	}
 
 	/**
@@ -613,7 +600,7 @@ template <typename X = void, typename Y = void> class LldpWatch {
 		const auto if_name { *interface_atom.GetValue<std::string_view>(
 		    lldpctl_k_interface_name) };
 
-		auto self { static_cast<LldpWatch<X, Y> *>(p) };
+		auto self { static_cast<LldpWatch *>(p) };
 
 		/*
 		 * Run the callbacks without holding the mutex to avoid a deadlock that occurs when
@@ -623,8 +610,8 @@ template <typename X = void, typename Y = void> class LldpWatch {
 		 * We also need to track the number of active callbacks to allow UnregisterInterfaceCallback to wait
 		 * for any running callbacks to complete.
 		 */
-		std::optional<std::pair<ChangeCallback<X>, X *>> general_cb;
-		std::optional<std::pair<ChangeCallback<Y>, Y *>> interface_cb;
+		std::optional<ChangeCallback> general_cb;
+		std::optional<ChangeCallback> interface_cb;
 
 		{
 			std::unique_lock lock{ self->mutex_ };
@@ -642,13 +629,11 @@ template <typename X = void, typename Y = void> class LldpWatch {
 
 		/* Run the callbacks without holding the mutex. */
 		if (general_cb.has_value()) {
-			auto [callback, ctx]{ general_cb.value() };
-			callback(if_name, change, interface_atom, neighbor_atom, ctx);
+			(*general_cb)(if_name, change, interface_atom, neighbor_atom);
 		}
 
 		if (interface_cb.has_value()) {
-			auto [callback, ctx]{ interface_cb.value() };
-			callback(if_name, change, interface_atom, neighbor_atom, ctx);
+			(*interface_cb)(if_name, change, interface_atom, neighbor_atom);
 		}
 
 		/* Decrement active callbacks and notify waiting threads. */
@@ -664,9 +649,8 @@ template <typename X = void, typename Y = void> class LldpWatch {
 	std::mutex mutex_;
 	std::condition_variable cv_;
 	size_t active_callbacks_{ 0 };
-	const std::optional<std::pair<ChangeCallback<X>, X *>> general_callback_;
-	std::map<std::string, std::pair<ChangeCallback<Y>, Y *>, std::less<>>
-	    interface_callbacks_;
+	const std::optional<ChangeCallback> general_callback_;
+	std::map<std::string, ChangeCallback, std::less<>> interface_callbacks_;
 };
 
 } // namespace lldpcli
