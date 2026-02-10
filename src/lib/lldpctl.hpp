@@ -473,6 +473,9 @@ class LldpWatch {
 	 * @param callback  Optional callback to trigger on remote changes.
 	 *                  Additionally, interface specific callbacks can be registered
 	 * 					using @ref RegisterInterfaceCallback.
+	 *
+	 * @note Exceptions raised by @p callback will be swallowed 
+	 *       to avoid a crash of the underlying C library.
 	 */
 	explicit LldpWatch(
 	    const std::optional<ChangeCallback> &callback = std::nullopt)
@@ -515,6 +518,9 @@ class LldpWatch {
 	 * @brief Register an interface specific callback on remote changes.
 	 *
 	 * @note Only up to one callback can be registered per interface.
+	 * 
+	 * @note Exceptions raised by @p callback will be swallowed (except during registration)
+	 *       to avoid a crash of the underlying C library.
 	 *
 	 * @param if_name       The local interface to monitor.
 	 * @param callback      Callback to trigger on remote changes.
@@ -590,7 +596,7 @@ class LldpWatch {
 
     private:
 	static void WatchCallback(lldpctl_change_t change, lldpctl_atom_t *interface,
-	    lldpctl_atom_t *neighbor, void *p)
+	    lldpctl_atom_t *neighbor, void *p) noexcept
 	{
 		/* These LldpAtoms don't extend the lifetime of the underlying
 		 * connection as it's owned by the library. */
@@ -628,12 +634,17 @@ class LldpWatch {
 		}
 
 		/* Run the callbacks without holding the mutex. */
-		if (general_cb.has_value()) {
-			(*general_cb)(if_name, change, interface_atom, neighbor_atom);
+		try {
+			if (general_cb.has_value()) {
+				(*general_cb)(if_name, change, interface_atom, neighbor_atom);
+			}
+	
+			if (interface_cb.has_value()) {
+				(*interface_cb)(if_name, change, interface_atom, neighbor_atom);
+			}
 		}
-
-		if (interface_cb.has_value()) {
-			(*interface_cb)(if_name, change, interface_atom, neighbor_atom);
+		catch (...) {
+			/* Swallow any exception to avoid letting it propagate into the C library which would kill the process. */
 		}
 
 		/* Decrement active callbacks and notify waiting threads. */
