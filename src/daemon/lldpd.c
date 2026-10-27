@@ -386,14 +386,16 @@ lldpd_count_neighbors(struct lldpd *cfg)
 }
 
 static void
-notify_clients_deletion(struct lldpd_hardware *hardware, struct lldpd_port *rport)
+notify_clients_deletion(struct lldpd_hardware *hardware, struct lldpd_port *rport, int state)
 {
 	TRACE(LLDPD_NEIGHBOR_DELETE(hardware->h_ifname, rport->p_chassis->c_name,
 	    rport->p_descr));
 	levent_ctl_notify(hardware->h_ifname, hardware->h_ifalias,
 	    NEIGHBOR_CHANGE_DELETED, rport);
+	levent_ctl_notify(hardware->h_ifname, hardware->h_ifalias, state, rport);
 #ifdef USE_SNMP
 	agent_notify(hardware, NEIGHBOR_CHANGE_DELETED, rport);
+	agent_notify(hardware, state, rport);
 #endif
 }
 
